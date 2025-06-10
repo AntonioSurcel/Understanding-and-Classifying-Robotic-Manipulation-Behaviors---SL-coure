@@ -1,0 +1,761 @@
+# %% Understanding and Classifying Robotic Manipulation Behaviors
+
+# import the data - please enter the path from your File Explorer where you saved the data
+
+import pandas as pd
+save_path = r"C:\_____________"
+
+# Load frame-level data
+final_df = pd.read_csv(f"{save_path}\\final_df.csv")
+
+# Load episode-level data
+episode_df = pd.read_csv(f"{save_path}\\episode_df.csv")
+
+# Use the flattened DataFrame (e.g., final_df)
+state_cols = [col for col in final_df.columns if col.startswith("state_")]
+action_cols = [col for col in final_df.columns if col.startswith("action_")]
+target_df = final_df
+
+
+
+
+print("State columns:", state_cols)
+print("Action columns:", action_cols)
+
+# Check for NaNs or empty values
+print(target_df[state_cols + action_cols].isna().sum().sum())  # Total missing values
+
+# Check sample data
+print(target_df[state_cols + action_cols].head())
+
+
+
+
+
+
+
+
+
+
+
+
+
+# %%
+
+import numpy as np
+
+# Define aggregation functions that handle NaNs safely
+# Named functions
+def q2_5(x): return np.percentile(x, 2.5)
+q2_5.__name__ = "q2.5"
+
+def q97_5(x): return np.percentile(x, 97.5)
+q97_5.__name__ = "q97.5"
+
+
+agg_functions = ["mean", "median", q2_5, q97_5, "min", "max"]
+aggregation_plan = {col: agg_functions for col in state_cols + action_cols}
+
+episode_df = target_df.groupby(["task_name", "episode_index"]).agg(aggregation_plan)
+episode_df.columns = [f"{col[0]}_{col[1]}" for col in episode_df.columns]
+episode_df = episode_df.reset_index()
+
+
+print(episode_df.columns.tolist())
+
+
+# %%
+
+
+print("Shape:", episode_df.shape)
+print("Columns:", episode_df.columns[:10])  # first few columns
+print("\nEpisodes per task:")
+print(episode_df["task_name"].value_counts())
+
+
+
+
+
+
+# %%
+
+
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Step 1: Filter numeric data
+X = episode_df.drop(columns=["task_name", "episode_index"])
+X = X.select_dtypes(include=[float, int])  # Keep only numeric columns
+
+# Step 2: Standardize the features
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# Step 3: Apply PCA
+pca = PCA(n_components=2)  # 2 components for 2D visualization
+X_pca = pca.fit_transform(X_scaled)
+
+# Step 4: Create a DataFrame with results
+pca_df = pd.DataFrame({
+    "PC1": X_pca[:, 0],
+    "PC2": X_pca[:, 1],
+    "task_name": episode_df["task_name"]
+})
+
+# Step 5: Plot
+plt.figure(figsize=(10, 6))
+sns.scatterplot(data=pca_df, x="PC1", y="PC2", hue="task_name", s=60, alpha=0.8)
+plt.title("PCA Projection of Episodes by Task")
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+
+
+# %%
+
+print(f"Explained variance by PC1: {pca.explained_variance_ratio_[0]:.2%}")
+print(f"Explained variance by PC2: {pca.explained_variance_ratio_[1]:.2%}")
+
+
+# %%
+
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Step 1: Drop non-numeric and non-feature columns
+X = episode_df.drop(columns=["task_name", "episode_index"])
+X = X.select_dtypes(include=[float, int])  # Keep numeric only
+
+# Step 2: Standardize features
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+# Step 3: Fit PCA without limiting n_components
+pca_full = PCA()
+pca_full.fit(X_scaled)
+
+# Step 4: Calculate cumulative explained variance
+cum_var = np.cumsum(pca_full.explained_variance_ratio_)
+n_components_80 = np.argmax(cum_var >= 0.80) + 1
+
+print(f"Number of components needed to explain 80% variance: {n_components_80}")
+
+# Step 5: Re-fit PCA with optimal number of components
+pca = PCA(n_components=n_components_80)
+X_pca = pca.fit_transform(X_scaled)
+
+# Step 6: Create a DataFrame with PCA components
+pca_columns = [f"PC{i+1}" for i in range(n_components_80)]
+pca_df = pd.DataFrame(X_pca, columns=pca_columns)
+pca_df["task_name"] = episode_df["task_name"]
+
+# Optional: Plot cumulative explained variance
+plt.figure(figsize=(8, 5))
+plt.plot(range(1, len(cum_var)+1), cum_var, marker='o')
+plt.axhline(0.80, color='r', linestyle='--', label="80% variance")
+plt.axvline(n_components_80, color='g', linestyle='--', label=f"{n_components_80} PCs")
+plt.xlabel("Number of Principal Components")
+plt.ylabel("Cumulative Explained Variance")
+plt.title("PCA Explained Variance")
+plt.grid(True)
+plt.legend()
+plt.tight_layout()
+plt.show()
+
+
+# %%
+
+# Each row is a PC, each column is a variable
+loadings = pd.DataFrame(pca.components_, columns=X.columns, index=[f"PC{i+1}" for i in range(pca.n_components_)])
+
+# Get max contribution (absolute loading) of each variable across all retained PCs
+max_contrib = loadings.abs().max()
+
+# Sort by importance
+sorted_contrib = max_contrib.sort_values(ascending=False)
+
+# Show top N relevant variables
+top_vars = sorted_contrib.head(16)
+print(top_vars)
+
+
+
+# %%
+
+plt.figure(figsize=(10, 6))
+top_vars.head(16).plot(kind="barh")
+plt.gca().invert_yaxis()
+plt.title("Top 16 Variables by Max PCA Loading")
+plt.xlabel("Max |Loading| Across Retained PCs")
+plt.tight_layout()
+plt.show()
+
+# %% Stepwise Logistic Regression (Forward Selection)
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_score
+import numpy as np
+
+X_vars = X[top_vars.index.tolist()]
+y = episode_df["task_name"]
+y = y.map({'pick': 0, 'place_bench': 1, 'place_cabinet': 2})
+y_multi = y  # already mapped to 0/1/2
+
+selected = []
+remaining = list(X_vars.columns)
+best_score = 0
+tolerance = 1e-4  # minimum improvement in score to continue
+
+while remaining:
+    scores = []
+    for candidate in remaining:
+        test_vars = selected + [candidate]
+        model = LogisticRegression(multi_class='multinomial', solver='lbfgs', max_iter=1000)
+        score = cross_val_score(model, X_vars[test_vars], y_multi, cv=5, scoring='accuracy').mean()
+        scores.append((score, candidate))
+
+    scores.sort(reverse=True)
+    top_score, top_candidate = scores[0]
+
+    if top_score > best_score + tolerance:
+        best_score = top_score
+        selected.append(top_candidate)
+        remaining.remove(top_candidate)
+        print(f"Added: {top_candidate}, CV accuracy: {top_score:.4f}")
+    else:
+        break
+
+print("\nFinal selected features:")
+print(selected)
+
+# %%
+from sklearn.linear_model import LogisticRegression
+
+# Fit the multinomial logistic regression model
+final_model = LogisticRegression(multi_class='multinomial', solver='lbfgs', max_iter=1000)
+final_model.fit(X_vars[selected], y_multi)
+
+
+
+# %%
+
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.model_selection import train_test_split
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Split into training and test sets
+X_train, X_test, y_train, y_test = train_test_split(X_vars[selected], y_multi, test_size=0.2, stratify=y_multi, random_state=42)
+
+# Fit final model
+final_model = LogisticRegression(multi_class='multinomial', solver='lbfgs', max_iter=1000)
+final_model.fit(X_train, y_train)
+
+# Predict
+y_pred = final_model.predict(X_test)
+
+# Accuracy
+acc = accuracy_score(y_test, y_pred)
+print(f"Test accuracy: {acc:.4f}")
+
+# Detailed classification report
+print("\nClassification report:")
+print(classification_report(y_test, y_pred, target_names=['pick', 'place_bench', 'place_cabinet']))
+
+# Confusion matrix
+cm = confusion_matrix(y_test, y_pred)
+plt.figure(figsize=(6, 4))
+sns.heatmap(cm, annot=True, fmt='d', cmap="Blues", xticklabels=['pick', 'place_bench', 'place_cabinet'], yticklabels=['pick', 'place_bench', 'place_cabinet'])
+plt.xlabel("Predicted")
+plt.ylabel("True")
+plt.title("Confusion Matrix (Stepwise Logistic Regression)")
+plt.tight_layout()
+plt.show()
+
+
+
+
+
+
+
+
+
+
+# %%
+
+
+from sklearn.linear_model import LogisticRegressionCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import classification_report, accuracy_score
+
+
+X_lasso = X[top_vars.index.tolist()]
+
+# Scale X (recommended for L1 regularization)
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X_lasso)  # X should be the full episode_df without task_name and episode_index
+
+# Encode target
+y_multi = y
+
+# Lasso Logistic Regression with CV
+lasso_cv = LogisticRegressionCV(
+    penalty='l1',
+    solver='saga',  # supports L1 penalty and multiclass
+    multi_class='multinomial',
+    Cs=10,
+    cv=5,
+    max_iter=5000,
+    random_state=42
+)
+
+lasso_cv.fit(X_scaled, y_multi)
+
+# Evaluate
+y_pred = lasso_cv.predict(X_scaled)
+print("Lasso Logistic Regression Accuracy:", accuracy_score(y_multi, y_pred))
+print("\nClassification Report:\n", classification_report(y_multi, y_pred))
+
+# Identify selected features
+coefs = pd.DataFrame(lasso_cv.coef_, columns=X_lasso.columns)
+nonzero_features = (coefs != 0).any(axis=0)
+selected_features_lasso = X_lasso.columns[nonzero_features].tolist()
+
+print("\nSelected features by Lasso (non-zero coefficients):")
+print(selected_features_lasso)
+print(len(selected_features_lasso))
+
+
+
+# %%
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Get the mean accuracy for each class across folds
+# shape: (n_classes, n_C_values)
+scores = np.mean([score.mean(axis=0) for score in lasso_cv.scores_.values()], axis=0)
+
+plt.figure(figsize=(8, 5))
+plt.semilogx(lasso_cv.Cs_, scores, marker='o')
+plt.axvline(x=lasso_cv.C_[0], color='red', linestyle='--', label=f'Selected C = {lasso_cv.C_[0]:.4f}')
+plt.xlabel('Inverse Regularization Strength (C = 1/λ)')
+plt.ylabel('Mean CV Accuracy')
+plt.title('Lasso Logistic Regression Cross-Validation')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+
+print("Selected inverse regularization strength (C):", lasso_cv.C_[0])
+print("Corresponding regularization strength (λ):", 1 / lasso_cv.C_[0])
+
+
+# %%
+import numpy as np
+import pandas as pd
+from sklearn.linear_model import LogisticRegressionCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score
+import matplotlib.pyplot as plt
+
+
+
+
+# Run Lasso with multiple seeds
+seeds = [0, 1, 42, 100, 2024, 2025]
+results = []
+
+for seed in seeds:
+    X_lasso = X[top_vars.index.tolist()]
+    y_multi = y
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_lasso)
+    
+    lasso_cv = LogisticRegressionCV(
+        penalty='l1',
+        solver='saga',
+        multi_class='multinomial',
+        Cs=10,
+        cv=5,
+        max_iter=5000,
+        random_state=seed
+    )
+    lasso_cv.fit(X_scaled, y_multi)
+    
+    y_pred = lasso_cv.predict(X_scaled)
+    acc = accuracy_score(y_multi, y_pred)
+    C_selected = lasso_cv.C_[0]
+    lambda_selected = 1 / C_selected
+    
+    # Count non-zero features
+    coefs = pd.DataFrame(lasso_cv.coef_, columns=X_lasso.columns)
+    nonzero_features = (coefs != 0).any(axis=0)
+    n_selected = nonzero_features.sum()
+    
+    results.append({
+        'seed': seed,
+        'C': C_selected,
+        'lambda': lambda_selected,
+        'accuracy': acc,
+        'n_features_selected': n_selected
+    })
+
+# Convert to DataFrame
+results_df = pd.DataFrame(results)
+print(results_df)
+
+
+# %%
+from sklearn.linear_model import LogisticRegressionCV
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score, classification_report
+from sklearn.model_selection import train_test_split
+
+# Episode-level features and labels
+X = episode_df.drop(columns=['task_name', 'episode_index'])
+y = episode_df['task_name']
+
+# Train-test split
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, stratify=y, random_state=42
+)
+
+# Standardize
+scaler = StandardScaler().fit(X_train)
+X_train_scaled = scaler.transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# Lasso Logistic Regression with CV
+lasso = LogisticRegressionCV(
+    penalty='l1',
+    solver='saga',
+    multi_class='multinomial',
+    Cs=np.logspace(-4, 1, 20),  # add wider range
+    cv=5,
+    max_iter=5000,
+    random_state=42
+)
+lasso.fit(X_train_scaled, y_train)
+
+# Evaluate on test set
+y_pred = lasso.predict(X_test_scaled)
+print("Test Accuracy:", accuracy_score(y_test, y_pred))
+print("\nClassification Report:\n", classification_report(y_test, y_pred))
+
+# Count selected features
+coefs = pd.DataFrame(lasso.coef_, columns=X.columns)
+nonzero_mask = (coefs != 0).any(axis=0)
+selected_features = X.columns[nonzero_mask].tolist()
+print(f"\nSelected {len(selected_features)} features:\n", selected_features)
+
+
+# %%
+# Compute mean cross-validated accuracy across all classes
+all_scores = lasso.scores_  # Dict: keys = class labels, values = [n_folds x n_Cs] arrays
+mean_cv_scores = np.mean([scores.mean(axis=0) for scores in all_scores.values()], axis=0)
+C_values = lasso.Cs_
+
+# Plot cross-validation curve
+import matplotlib.pyplot as plt
+
+plt.figure(figsize=(8, 5))
+plt.plot(C_values, mean_cv_scores, marker='o', label='Mean CV Accuracy')
+plt.axvline(x=lasso.C_[0], color='red', linestyle='--', label=f'Selected C = {lasso.C_[0]:.4f}')
+plt.xscale('log')
+plt.xlabel('Inverse Regularization Strength (C = 1/λ)')
+plt.ylabel('Mean CV Accuracy')
+plt.title('Lasso Logistic Regression Cross-Validation (All Features)')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+
+
+
+
+
+# %% simple DecisionTreeClassifier
+
+from sklearn.tree import DecisionTreeClassifier, plot_tree
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# === 1. Prepare Data ===
+X = episode_df.drop(columns=['task_name', 'episode_index'])
+y = episode_df['task_name']
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, stratify=y, test_size=0.2, random_state=42
+)
+
+# === 2. Train Decision Tree ===
+tree_clf = DecisionTreeClassifier(
+    max_depth=5,       # Limit depth to prevent overfitting
+    random_state=42
+)
+tree_clf.fit(X_train, y_train)
+
+# === 3. Evaluate ===
+y_pred = tree_clf.predict(X_test)
+print("=== Decision Tree ===")
+print("Accuracy:", accuracy_score(y_test, y_pred))
+print("\nClassification Report:\n", classification_report(y_test, y_pred))
+
+# === 4. Confusion Matrix ===
+plt.figure(figsize=(6, 4))
+sns.heatmap(confusion_matrix(y_test, y_pred), annot=True, cmap='Blues', fmt='d')
+plt.title('Decision Tree Confusion Matrix')
+plt.xlabel('Predicted')
+plt.ylabel('True')
+plt.tight_layout()
+plt.show()
+
+# === 5. Plot Tree  ===
+plt.figure(figsize=(16, 8))
+plot_tree(tree_clf, feature_names=X.columns, class_names=tree_clf.classes_, filled=True)
+plt.title("Decision Tree (max_depth=5)")
+plt.tight_layout()
+plt.show()
+
+
+
+
+# %% BaggingClassifier
+
+from sklearn.ensemble import BaggingClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+X = episode_df.drop(columns=['task_name', 'episode_index'])
+y = episode_df['task_name']
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, stratify=y, test_size=0.2, random_state=42
+)
+
+
+# Initialize Bagging with Decision Tree as base estimator
+bagging = BaggingClassifier(
+    estimator=DecisionTreeClassifier(),   
+    n_estimators=100,
+    random_state=42
+)
+
+# Fit and predict
+bagging.fit(X_train, y_train)
+y_pred_bag = bagging.predict(X_test)
+
+# Evaluation
+print("=== Bagging Classifier ===")
+print("Accuracy:", accuracy_score(y_test, y_pred_bag))
+print("\nClassification Report:\n", classification_report(y_test, y_pred_bag))
+
+# Confusion Matrix
+plt.figure(figsize=(6, 4))
+sns.heatmap(confusion_matrix(y_test, y_pred_bag), annot=True, fmt='d', cmap='Blues')
+plt.title('Bagging Classifier Confusion Matrix')
+plt.xlabel('Predicted')
+plt.ylabel('True')
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(16, 8))
+plot_tree(bagging.estimators_[0],
+          feature_names=X.columns,
+          class_names=bagging.classes_,
+          filled=True,
+          rounded=True)
+plt.title("Example Tree from Bagging Ensemble (max_depth=5)")
+plt.tight_layout()
+plt.show()
+
+# %%
+
+from sklearn.model_selection import cross_val_score
+scores = cross_val_score(bagging, X, y, cv=5)
+print("Mean CV accuracy:", scores.mean())
+
+# %%
+
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay
+import matplotlib.pyplot as plt
+from sklearn.tree import plot_tree
+
+
+
+X = episode_df.drop(columns=['task_name', 'episode_index'])
+y = episode_df['task_name']
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, stratify=y, test_size=0.2, random_state=42
+)
+
+
+# === Train Random Forest ===
+rf_clf = RandomForestClassifier(n_estimators=100, max_depth=5, random_state=42)
+rf_clf.fit(X_train, y_train)
+
+# === Evaluate ===
+y_pred_rf = rf_clf.predict(X_test)
+
+print("=== Random Forest Classifier ===")
+print("Accuracy:", accuracy_score(y_test, y_pred_rf))
+print("\nClassification Report:\n", classification_report(y_test, y_pred_rf))
+
+# === Confusion Matrix ===
+cm = confusion_matrix(y_test, y_pred_rf)
+ConfusionMatrixDisplay(cm, display_labels=rf_clf.classes_).plot(cmap="Blues")
+plt.title("Random Forest Confusion Matrix")
+plt.tight_layout()
+plt.savefig("Random Forest Confusion Matrix.png")
+plt.show()
+
+# === Plot one tree from the forest ===
+plt.figure(figsize=(14, 7))
+plot_tree(rf_clf.estimators_[0],
+          feature_names=X.columns,
+          class_names=rf_clf.classes_,
+          filled=True,
+          rounded=True,
+          max_depth=5)
+plt.title("Example Tree from Random Forest (max_depth=5)")
+plt.savefig("Example Tree from Random Forest (max_depth=5).png")
+plt.show()
+
+
+
+
+
+# %%
+
+from sklearn.ensemble import GradientBoostingClassifier
+from sklearn.metrics import classification_report, accuracy_score, ConfusionMatrixDisplay
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.tree import plot_tree
+import matplotlib.pyplot as plt
+
+# Define X and y
+X = episode_df.drop(columns=['task_name', 'episode_index'])
+y = episode_df['task_name']
+
+# Split the data
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, stratify=y, test_size=0.2, random_state=40
+)
+
+# (Optional) scale features
+
+# Train Gradient Boosting Classifier
+gb_clf = GradientBoostingClassifier(
+    n_estimators=100, max_depth=3, learning_rate=0.1, random_state=42
+)
+gb_clf.fit(X_train, y_train)
+
+# Predict
+y_pred = gb_clf.predict(X_test)
+
+# Evaluate performance
+print("=== Gradient Boosting Classifier ===")
+print("Accuracy:", accuracy_score(y_test, y_pred))
+print("\nClassification Report:\n", classification_report(y_test, y_pred))
+
+# Confusion Matrix
+ConfusionMatrixDisplay.from_predictions(y_test, y_pred, cmap='Blues')
+plt.title("Gradient Boosting Confusion Matrix")
+plt.tight_layout()
+plt.show()
+
+# Plot one tree
+class_names = ['pick', 'place_bench', 'place_cabinet']
+
+# Visualize a tree from the gradient boosting model
+plt.figure(figsize=(14, 8))
+plot_tree(gb_clf.estimators_[0, 0],
+          filled=True,
+          feature_names=X.columns,
+          class_names=class_names,
+          max_depth=3,
+          rounded=True)
+plt.title("Example Tree from Gradient Boosting (Estimator 0, Class 0)")
+plt.tight_layout()
+plt.show()
+
+
+# %%
+
+
+from sklearn.svm import SVC
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
+from sklearn.model_selection import train_test_split
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Prepare data
+X = episode_df.drop(columns=['task_name', 'episode_index'])
+y = episode_df['task_name']
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, test_size=0.2, random_state=42)
+
+
+
+# Linear SVM
+svm_linear = SVC(kernel='linear', decision_function_shape='ovo', random_state=42)
+svm_linear.fit(X_train, y_train)
+
+# Predict and evaluate
+y_pred = svm_linear.predict(X_test)
+print("=== SVM with Linear Kernel ===")
+print("Accuracy:", accuracy_score(y_test, y_pred))
+print("\nClassification Report:\n", classification_report(y_test, y_pred))
+
+
+
+
+
+# %%
+
+conf_matrix = confusion_matrix(y_test, y_pred, labels=svm_linear.classes_)
+sns.heatmap(conf_matrix, annot=True, fmt='d', cmap='Blues', xticklabels=svm_linear.classes_, yticklabels=svm_linear.classes_)
+plt.title("SVM Linear Kernel - Confusion Matrix")
+plt.xlabel("Predicted")
+plt.ylabel("True")
+plt.tight_layout()
+plt.show()
+
+
+
+# %%
+print(f"Number of support vectors: {svm_linear.n_support_}")
+
+
+# %%  
+
+
+
+
+# %%
+
+svm_rbf = SVC(kernel='rbf', C=1, gamma='scale', decision_function_shape='ovo', random_state=42)
+svm_rbf.fit(X_train, y_train)
+y_pred_rbf = svm_rbf.predict(X_test)
+
+print("\n=== SVM with RBF Kernel ===")
+print("Accuracy:", accuracy_score(y_test, y_pred_rbf))
+print("\nClassification Report:\n", classification_report(y_test, y_pred_rbf))
+
