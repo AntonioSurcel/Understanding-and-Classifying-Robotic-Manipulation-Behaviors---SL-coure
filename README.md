@@ -18,4 +18,4 @@ by a simulated Kinova Gen3 bimanual robot in a virtual kitchen environment.
 
 **To check the code you need to downlaod the data from the next link:**
 
-https://drive.google.com/drive/folders/1LGkG5QTCbALlGeL7Za6Qk89XxeKhTRlg?usp=drive_link
+https://drive.google.com/drive/folders/1LGkG5QTCbALlGeL7Za6Qk89XxeKhTRlg?usp=sharing
