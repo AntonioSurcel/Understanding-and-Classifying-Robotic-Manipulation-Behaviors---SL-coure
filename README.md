@@ -1,5 +1,5 @@
 HI!
-This is the code repository for a project in the course "Statistical Learning" in Spring 2025.
+This is the code repository for the project in the course "Statistical Learning" in Spring 2025.
 
 This project explores whether robotic manipulation behaviors can be grouped
 and classified based solely on control signals and sensor observations. Using data
